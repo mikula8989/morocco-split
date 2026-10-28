@@ -1,0 +1,6 @@
+node_modules/
+.clasp.json
+.env*
+secrets*
+credentials*
+playwright-report/

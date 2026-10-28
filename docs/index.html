@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="lt">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#a94728"><meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Morocco Split">
+  <meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>Morocco Split</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="./icon-192.png"><link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header><a class="brand" href="./"><span class="brand-icon">M</span><span>Morocco <b>Split</b><small>MIKAS · ALFONSAS · LINAS</small></span></a><button id="settings-open" class="icon-button" aria-label="Nustatymai">⚙</button></header>
+    <div class="trip-line"><span>TRIJŲ DRAUGŲ KELIONĖ</span><span>المغرب · MAROC</span></div>
+    <section class="intro"><h1>Mažiau skaičių.<br>Daugiau Maroko.</h1><p>Išlaidas pasidalinsim. Prisiminimus – irgi.</p></section>
+    <div class="status-row"><span id="sync-status" role="status">Atidaroma…</span><button id="sync" class="text-button">Atnaujinti ↻</button></div>
+    <div id="setup-note" class="notice" hidden>Šiame telefone įrašai saugomi. Bendram sinchronizavimui <button id="connect-open" class="text-button">prijunk savo raktą →</button></div>
+    <main>
+      <section class="card entry-card" aria-labelledby="new-title">
+        <div class="section-title"><span class="eyebrow">01 / ĮRAŠYTI</span><h2 id="new-title">Nauja išlaida</h2></div>
+        <form id="expense-form">
+          <div class="amount-line"><label class="amount-label">Suma<input id="amount" name="amount" placeholder="0,00" inputmode="decimal" required autocomplete="off" aria-label="Suma"></label><label class="currency-label">Valiuta<select name="currency" id="currency"><option>EUR</option><option>MAD</option></select></label></div>
+          <label id="rate-wrap" hidden>Keitimo kursas · 1 EUR = kiek MAD?<input id="rate" inputmode="decimal" placeholder="Įvesk savo keitimo kursą"><small>Kursas lieka prie šio įrašo. Automatiškai jo nekeičiame.</small></label>
+          <label>Už ką mokėta?<input name="description" id="description" maxlength="160" placeholder="Vakarienė, taksi, riadas…" required></label>
+          <label>Kas sumokėjo?<select id="payer" name="payer"><option>Mikas</option><option>Alfonsas</option><option>Linas</option></select></label>
+          <fieldset><legend>Kas dalinasi?</legend><div class="people"><label><input type="checkbox" name="participant" value="Mikas" checked><span>Mikas</span></label><label><input type="checkbox" name="participant" value="Alfonsas" checked><span>Alfonsas</span></label><label><input type="checkbox" name="participant" value="Linas" checked><span>Linas</span></label></div></fieldset>
+          <p id="split-preview" class="small">Dalinama lygiomis dalimis.</p>
+          <button type="submit" id="save" class="primary">Išsaugoti išlaidą <span>＋</span></button>
+          <p id="form-message" role="status" class="message"></p>
+        </form>
+      </section>
+      <div class="summary-column">
+        <section class="card balances-card" aria-labelledby="balance-title"><div class="section-title"><span class="eyebrow">02 / ATSISKAITYTI</span><h2 id="balance-title">Mūsų balansas</h2></div><div id="balances"></div><div id="settlements" class="settlements"></div><p class="small" id="balance-note">+ turi atgauti · − turi grąžinti</p></section>
+        <section class="total-card"><span>KELIONĖS IŠLAIDOS</span><strong id="total">0,00 €</strong><span id="count">0 įrašų</span></section>
+      </div>
+      <section class="card history-card" aria-labelledby="history-title"><div class="history-heading"><div class="section-title"><span class="eyebrow">03 / PRISIMINTI</span><h2 id="history-title">Išlaidų istorija</h2></div><button id="export" class="text-button">Atsarginė kopija ↓</button></div><p id="history-empty" class="empty">Kol kas tuščia. Pirma išlaida – pirmas nuotykis.</p><div id="history"></div></section>
+    </main>
+    <footer><span>Įrašai išsaugomi ir be ryšio.</span><button id="install" class="text-button">Įsidėti į telefoną ↗</button></footer>
+  </div>
+  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Šis telefonas</h2><button type="button" id="settings-close" class="icon-button" aria-label="Uždaryti">×</button></div><p class="small">Pasirink savo vardą ir įvesk asmeninį raktą. Raktą gauni iš Miko.</p><label>Aš esu<select id="identity"><option>Mikas</option><option>Alfonsas</option><option>Linas</option></select></label><label>Apps Script nuoroda<input id="endpoint" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></label><label>Mano asmeninis raktas<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Asmeninis dalyvio raktas"></label><p class="small">Raktas saugomas tik šios programėlės atmintyje telefone. Dalinkis tik savo raktu. Neišvalyk naršyklės duomenų, kol yra neišsiųstų įrašų.</p><button type="submit" class="primary">Išsaugoti nustatymus</button><p id="settings-message" class="message" role="status"></p><p class="small">Jei pakeisi vardą, seni neišsiųsti įrašai liks priskirti ankstesniam vardui ir palauks jo prisijungimo.</p></form></dialog>
+  <dialog id="install-dialog"><div class="dialog-heading"><h2>Įsidėk į telefoną</h2><button id="install-close" class="icon-button" aria-label="Uždaryti">×</button></div><p><b>Android:</b> atidaryk per Chrome → ⋮ → „Add to Home screen“ / „Install app“.</p><p><b>iPhone:</b> atidaryk per Safari → bendrinimo mygtukas □↑ → „Add to Home Screen“ → „Add“.</p><p class="small">Pirmą kartą atidaryk su internetu. Be ryšio naujos išlaidos liks telefone. Sinchronizuosime atidarius programėlę arba jai esant ekrane ir grįžus ryšiui. Uždarytos programėlės automatinio siuntimo iPhone negarantuoja.</p><p id="offline-ready" class="small"></p></dialog>
+</body>
+</html>

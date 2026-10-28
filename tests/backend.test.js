@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import {normalizeExpense,PEOPLE} from '../docs/core.js';
+const source=fs.readFileSync(new URL('../apps-script/Code.gs',import.meta.url),'utf8');
+function harness(){
+  const rows=[],props={},key='a'.repeat(64);let locked=false;
+  const sheet={getLastRow:()=>rows.length+1,getRange:(r,c,h,w)=>({getValues:()=>r===1?[['ID','Sukurta','Mokėtojas','Aprašymas','Suma','Valiuta','Kursas MAD/EUR','Suma EUR','Mikas dalinasi','Alfonsas dalinasi','Linas dalinasi','Įrašė','Atnaujinta']]:rows.slice(r-2,r-2+h),setValues:values=>{assert.ok(locked);rows.push(...values);}})};
+  const context=vm.createContext({console,SpreadsheetApp:{openById:()=>({getSheetByName:()=>sheet}),flush:()=>{}},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k],setProperty:(k,v)=>props[k]=v})},Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>[...crypto.createHash('sha256').update(text).digest()]},LockService:{getScriptLock:()=>({waitLock:()=>locked=true,releaseLock:()=>locked=false})},ContentService:{MimeType:{JSON:'json'},createTextOutput:text=>({setMimeType:()=>text})}});
+  vm.runInContext(source,context);props.KEY_HASH_Mikas=crypto.createHash('sha256').update(key).digest('hex');
+  const post=(records,changes={})=>JSON.parse(context.doPost({postData:{contents:JSON.stringify({version:1,person:'Mikas',token:key,records,...changes})}}));
+  return {rows,post,context};
+}
+const make=(changes={})=>({...normalizeExpense({amount:'100',currency:'MAD',rate:'10.8',description:'=IMPORTXML("bad")',payer:'Linas',participants:PEOPLE}),id:crypto.randomUUID(),createdAt:new Date().toISOString(),recordedBy:'Mikas',...changes});
+test('lost-response retry is idempotent, formulas stored safely and read back',()=>{
+  const h=harness(),entry=make();const first=h.post([entry]);assert.equal(first.ok,true);assert.equal(h.rows.length,1);assert.equal(h.rows[0][3][0],'\u200b');
+  const retry=h.post([entry]);assert.equal(retry.ok,true);assert.deepEqual(retry.acked,[entry.id]);assert.equal(h.rows.length,1);assert.equal(retry.records[0].description,entry.description);
+});
+test('same ID different content is rejected without replacing the first row',()=>{
+  const h=harness(),entry=make();h.post([entry]);assert.equal(h.post([{...entry,description:'Changed'}]).ok,false);assert.equal(h.rows.length,1);
+});
+test('invalid token, impersonation and forged EUR totals cannot write',()=>{
+  const h=harness(),entry=make();
+  assert.equal(h.post([entry],{token:'b'.repeat(64)}).ok,false);
+  assert.equal(h.post([{...entry,recordedBy:'Linas'}]).ok,false);
+  assert.equal(h.post([{...entry,eurCents:1}]).ok,false);
+  assert.equal(h.rows.length,0);
+});
+test('batch validates before writing and duplicate IDs within a batch write once',()=>{
+  const h=harness(),entry=make();assert.equal(h.post([entry,make({participants:[]})]).ok,false);assert.equal(h.rows.length,0);
+  assert.equal(h.post([entry,entry]).ok,true);assert.equal(h.rows.length,1);
+});
+test('empty authenticated sync reads other participants entries; unauthenticated GET exposes no records',()=>{
+  const h=harness(),entry=make();h.post([entry]);assert.equal(h.post([]).records.length,1);assert.equal(JSON.parse(h.context.doGet()).records,undefined);
+});
