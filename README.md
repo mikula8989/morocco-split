@@ -19,7 +19,7 @@ Nustatymuose pasirinkti savo vardą, įklijuoti bendrą Apps Script `/exec` adre
 
 ## GitHub Pages
 
-**Settings → Pages → Source: Deploy from a branch → Branch: main → Folder: /docs → Save.** Jokių paslapčių, papildomų paslaugų ar build sistemos nereikia. Publikuojamas tik `docs/`, serverio testai ir Apps Script kodas nepridedami prie PWA failų rinkinio.
+**Settings → Pages → Source: Deploy from a branch → Branch: main → Folder: /docs → Save.** Jei pasirinktas `/(root)`, šakninis `index.html` automatiškai nukreips į `docs/` programėlę. Abu variantai veikia. Jokių paslapčių, papildomų paslaugų ar build sistemos nereikia. Į PWA offline failų rinkinį patenka tik programėlės failai iš `docs/`.
 
 ## Duomenų principas
 
@@ -33,4 +33,4 @@ Nustatymuose pasirinkti savo vardą, įklijuoti bendrą Apps Script `/exec` adre
 
 ## Patikra
 
-Reikia Node.js 22 ar naujesnės versijos. `npm test` – skaičiavimo ir serverio idempotentiškumo, autentifikavimo, paketo atomiškumo bei formulių neutralizavimo patikros. `npm start` – vietinė peržiūra `http://127.0.0.1:4173/morocco-split/`. Papildomos priklausomybės reikalingos tik piktogramoms generuoti (`sharp`) ir naršyklės integracijos testams (`playwright`). PWA veikimui priklausomybių nėra.
+Reikia Node.js 22 ar naujesnės versijos. `npm test` – skaičiavimo ir serverio idempotentiškumo, autentifikavimo, paketo atomiškumo bei formulių neutralizavimo patikros. `npm start` – vietinė peržiūra `http://127.0.0.1:4173/morocco-split/`; `/tests/db-browser.html` atlieka 8 tikros IndexedDB patikras ir pašalina tik savo bandomus įrašus, `/tests/mobile.html` rodo 390 px telefono išdėstymą. Piktogramoms iš naujo generuoti reikia `sharp`. PWA veikimui priklausomybių nėra.
