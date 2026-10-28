@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Morocco Split · IndexedDB tests</title><h1>IndexedDB integration tests</h1><pre id="results">Running…</pre><script type="module">
+import {enqueue,applySync,all,transact} from '/morocco-split/db.js';
+const results=[],created=[];
+const report=(name,pass)=>{results.push((pass?'PASS ':'FAIL ')+name);if(!pass)throw Error(name);};
+const item=()=>{const record={id:crypto.randomUUID(),createdAt:new Date().toISOString(),description:'TEST ONLY',payer:'Mikas',participants:['Mikas','Alfonsas','Linas'],amountMinor:3000,eurCents:3000,currency:'EUR',rateMicros:1000000,recordedBy:'Mikas'};created.push(record.id);return record;};
+try {
+ const first=item(),second=item();await enqueue(first);await enqueue(second);
+ report('expense and outbox saved together',(await all('expenses')).some(e=>e.id===first.id)&&(await all('outbox')).some(e=>e.id===first.id));
+ let duplicateRejected=false;try{await enqueue(first);}catch{duplicateRejected=true;}report('duplicate ID transaction aborts',duplicateRejected);
+ let invalidRejected=false;try{await applySync({ok:true,acked:[second.id],records:[second]},[first]);}catch{invalidRejected=true;}report('unsent acknowledgement rejected',invalidRejected);
+ report('bad acknowledgement preserves queue',(await all('outbox')).some(e=>e.id===first.id));
+ await applySync({ok:true,acked:[first.id],records:[{...first,updatedAt:new Date().toISOString()}]},[first]);
+ report('only server-confirmed record leaves queue',!(await all('outbox')).some(e=>e.id===first.id)&&(await all('outbox')).some(e=>e.id===second.id));
+ const third=item();await enqueue(third);
+ await applySync({ok:true,acked:[second.id],records:[first,second]},[second]);
+ report('entry added during sync survives',(await all('expenses')).some(e=>e.id===third.id)&&(await all('outbox')).some(e=>e.id===third.id));
+ await applySync({ok:true,acked:[],records:[{...third,description:'stale server value'}]},[]);
+ report('server snapshot never overwrites pending version',(await all('expenses')).find(e=>e.id===third.id).description==='TEST ONLY');
+ let malformedRejected=false;try{await applySync({ok:true,acked:[third.id],records:[]},[third]);}catch{malformedRejected=true;}report('missing canonical record retains pending entry',malformedRejected&&(await all('outbox')).some(e=>e.id===third.id));
+}catch(error){results.push('ERROR '+error.message);}
+finally{
+ await transact(['expenses','outbox'],'readwrite',tx=>{for(const id of created){tx.objectStore('expenses').delete(id);tx.objectStore('outbox').delete(id);}});
+ document.querySelector('#results').textContent=results.join('\n');
+ document.title=results.some(r=>r.startsWith('FAIL')||r.startsWith('ERROR'))?'FAIL · IndexedDB':'PASS · IndexedDB';
+}
+</script></html>
