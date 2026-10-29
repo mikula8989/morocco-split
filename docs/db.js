@@ -46,6 +46,7 @@ export async function applySync(response, sent) {
   if (response?.ok !== true || !Array.isArray(response.records) || !Array.isArray(response.acked)) throw new Error(response?.error || 'Serveris nepatvirtino sinchronizavimo.');
   if (response.acked.some(id => !allowed.has(id))) throw new Error('Neteisingas serverio patvirtinimas.');
   for (const record of response.records) {
+    if(record?.deleted===true && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(record.id) && ['Mikas','Alfonsas','Linas'].includes(record.recordedBy)) continue;
     if (!record || typeof record.id !== 'string' || !Number.isSafeInteger(record.eurCents) || record.eurCents <= 0 || !['Mikas','Alfonsas','Linas'].includes(record.payer) || !Array.isArray(record.participants) || !record.participants.length || record.participants.some(p=>!['Mikas','Alfonsas','Linas'].includes(p))) throw new Error('Serverio duomenys neatpažinti.');
   }
   const ids = new Set(response.records.map(e=>e.id));
@@ -58,7 +59,9 @@ export async function applySync(response, sent) {
       request.onsuccess = () => {
         const confirmed=response.acked.includes(record.id) && JSON.stringify(request.result)===JSON.stringify(sent.find(e=>e.id===record.id));
         if(confirmed) outbox.delete(record.id);
-        if (!request.result || confirmed) tx.objectStore('expenses').put(record);
+        // A server tombstone wins over stale edits on another phone as well.
+        if(record.deleted) {outbox.delete(record.id);tx.objectStore('expenses').delete(record.id);}
+        else if (!request.result || confirmed) tx.objectStore('expenses').put(record);
       };
     }
   });

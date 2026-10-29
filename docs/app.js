@@ -35,6 +35,16 @@ function startEditing(expense) {
   $('.entry-card').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
   $('#amount').focus({preventScroll:true});
 }
+async function deleteExpense(expense) {
+  if(syncing || saving || editing) {message('#history-message','Pirmiausia užbaik taisymą arba palauk sinchronizavimo.',true);return;}
+  if(!confirm(`Ištrinti „${expense.description}“ (${money(expense.eurCents)})? Išlaida bus pašalinta ir iš bendro balanso.`)) return;
+  saving=true;
+  try {
+    await enqueue({...expense,deleted:true,baseRecord:expense.baseRecord||expense},expense);
+    await render();message('#history-message','Išlaida ištrinta šiame telefone. '+(navigator.onLine&&configured()?'Siunčiame pašalinimą į bendrą lentelę.':'Pašalinimą sinchronizuosime grįžus ryšiui.'));
+  } catch(error) {message('#history-message',error.message,true);}
+  finally {saving=false;void sync();}
+}
 async function refreshRate() {
   if(fxPromise) return fxPromise;
   if(Date.now() < nextFxAttempt) return fxRate;
@@ -64,6 +74,7 @@ function preview() {
 }
 async function render() {
   [entries,pending] = await Promise.all([all('expenses'),all('outbox')]);
+  entries=entries.filter(e=>!e.deleted);
   entries.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||a.id.localeCompare(b.id));
   const queued = new Set(pending.map(e=>e.id));
   $('#setup-note').hidden=configured();
@@ -93,6 +104,9 @@ async function render() {
       const edit=node('button','Taisyti','text-button edit-expense');edit.type='button';
       edit.setAttribute('aria-label',`Taisyti išlaidą: ${expense.description}`);
       edit.addEventListener('click',()=>startEditing(expense));right.append(edit);
+      const remove=node('button','Ištrinti','text-button delete-expense');remove.type='button';
+      remove.setAttribute('aria-label',`Ištrinti išlaidą: ${expense.description}`);
+      remove.addEventListener('click',()=>{void deleteExpense(expense);});right.append(remove);
     }
     row.append(left,right); $('#history').append(row);
   }
@@ -113,11 +127,12 @@ async function sync() {
       const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),30000);
       let response;
       try {
-        const result=await fetch(credentials.endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({version:1,person:credentials.person,token:credentials.token,records:sent}),credentials:'omit',redirect:'follow',cache:'no-store',signal:controller.signal});
+        const result=await fetch(credentials.endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({version:sent.some(e=>e.deleted)?2:1,person:credentials.person,token:credentials.token,records:sent}),credentials:'omit',redirect:'follow',cache:'no-store',signal:controller.signal});
         if(!result.ok) throw new Error('Serveris nepasiekiamas.');
         response=await result.json();
       } finally {clearTimeout(timeout);}
       if(response?.ok!==true) {
+        if(sent.some(e=>e.deleted) && response?.error==='Netinkamas vardas arba raktas.') throw new Error('Pašalinimas liko telefone. Reikia atnaujinti Google sinchronizavimo paslaugą.');
         if(sent.some(e=>e.baseRecord) && response?.error?.startsWith('ID konfliktas:')) throw new Error('Pataisymas liko telefone. Reikia atnaujinti Google sinchronizavimo paslaugą.');
         throw new Error(response?.error||'Sinchronizavimas nepatvirtintas.');
       }
@@ -176,7 +191,7 @@ $('#settings-form').addEventListener('submit',async event=>{
 });
 $('#sync').addEventListener('click',()=>{nextFxAttempt=0;void refreshRate();return configured()?sync():showSettings();});
 $('#export').addEventListener('click',()=>{
-  const blob=new Blob([JSON.stringify({version:1,exportedAt:new Date().toISOString(),expenses:entries,pendingIds:pending.map(e=>e.id)},null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:1,exportedAt:new Date().toISOString(),expenses:entries,pendingIds:pending.map(e=>e.id),pendingDeletions:pending.filter(e=>e.deleted)},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob),link=node('a');link.href=url;link.download=`morocco-split-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
 });
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;});

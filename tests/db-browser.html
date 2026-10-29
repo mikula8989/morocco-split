@@ -25,6 +25,15 @@ try {
  report('confirmed correction clears queue and stores canonical version',!(await all('outbox')).some(e=>e.id===third.id)&&!(await all('expenses')).find(e=>e.id===third.id).baseRecord);
  let staleRejected=false;try{await enqueue({...third,description:'STALE'},third);}catch{staleRejected=true;}
  report('stale local editor cannot overwrite newer data',staleRejected&&(await all('expenses')).find(e=>e.id===third.id).description==='CORRECTED');
+ const deletion={...canonical,deleted:true,baseRecord:canonical};await enqueue(deletion,canonical);
+ await applySync({ok:true,acked:[],records:[canonical]},[]);
+ report('old snapshot cannot resurrect pending deletion',(await all('expenses')).find(e=>e.id===third.id).deleted===true);
+ const tombstone={id:third.id,recordedBy:'Mikas',deleted:true,updatedAt:new Date().toISOString()};
+ await applySync({ok:true,acked:[third.id],records:[tombstone]},[deletion]);
+ report('confirmed deletion removes local content and outbox',!(await all('expenses')).some(e=>e.id===third.id)&&!(await all('outbox')).some(e=>e.id===third.id));
+ await enqueue(third);
+ await applySync({ok:true,acked:[],records:[tombstone]},[]);
+ report('deletion from another phone wins over stale pending edits',!(await all('expenses')).some(e=>e.id===third.id)&&!(await all('outbox')).some(e=>e.id===third.id));
 }catch(error){results.push('ERROR '+error.message);}
 finally{
  await transact(['expenses','outbox'],'readwrite',tx=>{for(const id of created){tx.objectStore('expenses').delete(id);tx.objectStore('outbox').delete(id);}});

@@ -33,6 +33,14 @@ try {
  const entries=await all('expenses');
  report('rapid duplicate submission creates one expense',entries.length===2&&entries.find(e=>e.description==='NEW UI').eurCents===1234);
  report('form resets only after persistence',$('#amount').value===''&&$('#description').value===''&&$('#form-message').textContent.includes('Išsaugota telefone'));
+ await wait(()=>!$('#save').disabled);
+ const row=[...doc.querySelectorAll('.expense')].find(e=>e.querySelector('h3').textContent==='CORRECTED UI');
+ frame.contentWindow.confirm=()=>false;row.querySelector('.delete-expense').click();
+ report('cancelled confirmation preserves expense',(await all('expenses')).find(e=>e.id===original.id).deleted!==true);
+ frame.contentWindow.confirm=()=>true;row.querySelector('.delete-expense').click();
+ await wait(()=>!row.isConnected);
+ report('confirmed deletion removes history and recalculates total',$('#count').textContent==='1 įrašų'&&$('#total').textContent.includes('12,34'));
+ report('deletion is queued for Google sync',(await all('outbox')).find(e=>e.id===original.id).deleted===true);
 } catch(error){results.push('ERROR '+error.message);}
 document.querySelector('#results').textContent=results.join('\n');
 document.title=results.some(r=>r.startsWith('FAIL')||r.startsWith('ERROR'))?'FAIL · expense UI':'PASS · expense UI';

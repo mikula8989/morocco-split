@@ -55,3 +55,29 @@ test('offline correction before first sync creates only the corrected expense',(
   const h=harness(),entry=make();const response=h.post([{...entry,description:'Corrected offline',baseRecord:entry}]);
   assert.equal(response.ok,true);assert.equal(h.rows.length,1);assert.equal(response.records[0].description,'Corrected offline');
 });
+test('deletion clears expense details and is idempotent; stale clients cannot resurrect it',()=>{
+  const h=harness(),entry=make();h.post([entry]);
+  const deletion={...entry,deleted:true,baseRecord:entry};
+  assert.equal(h.post([deletion]).ok,false,'v1 must not accept deletion');
+  const response=h.post([deletion],{version:2});assert.equal(response.ok,true);
+  assert.equal(h.rows.length,1);assert.equal(h.rows[0][0],'deleted:'+entry.id);
+  assert.ok(h.rows[0].slice(1,11).every(v=>v===''),'expense content removed');
+  assert.equal(response.records[0].deleted,true);assert.equal(response.records[0].description,undefined);
+  assert.equal(h.post([deletion],{version:2}).ok,true);
+  const stale=h.post([entry]);assert.equal(stale.ok,true);assert.equal(stale.records[0].deleted,true);
+  assert.equal(h.rows[0][0],'deleted:'+entry.id);
+});
+test('deletion before first upload never inserts an active expense',()=>{
+  const h=harness(),entry=make();
+  const response=h.post([{...entry,deleted:true,baseRecord:entry}],{version:2});
+  assert.equal(response.ok,true);assert.equal(response.records[0].deleted,true);assert.equal(h.rows[0][3],'');
+});
+test('deletion checks ownership and stale versions before writing the batch',()=>{
+  const h=harness(),entry=make();h.post([entry]);
+  const changed={...entry,description:'Changed',baseRecord:entry};h.post([changed]);
+  assert.equal(h.post([make(),{...entry,deleted:true,baseRecord:entry}],{version:2}).ok,false);
+  assert.equal(h.rows.length,1);assert.equal(h.rows[0][3],'Changed');
+  h.rows[0][11]='Linas';
+  assert.equal(h.post([{...changed,deleted:true,baseRecord:changed}],{version:2}).ok,false);
+  assert.equal(h.rows[0][3],'Changed');
+});

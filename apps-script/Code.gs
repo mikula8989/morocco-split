@@ -52,16 +52,23 @@ function showKeys_(keys) {
   html+='<p>Apps Script nustatymuose saugomos tik SHA-256 raktų maišos.</p></div>';
   SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(html).setWidth(560).setHeight(590),'Morocco Split · raktai');
 }
-function doGet() {return json_({ok:true,service:'Morocco Split',version:1,editing:true,message:'Sinchronizavimui naudojamas tik autentifikuotas POST.'});}
+function doGet() {return json_({ok:true,service:'Morocco Split',version:1,editing:true,deleting:true,message:'Sinchronizavimui naudojamas tik autentifikuotas POST.'});}
 function doPost(e) {
   try {
     if(!e||!e.postData||e.postData.contents.length>60000)throw new Error('Neteisinga užklausa.');
     var payload=JSON.parse(e.postData.contents);
-    if(payload.version!==1||PEOPLE.indexOf(payload.person)<0||typeof payload.token!=='string'||!/^[a-f0-9]{64}$/.test(payload.token))throw new Error('Netinkamas vardas arba raktas.');
+    if([1,2].indexOf(payload.version)<0||PEOPLE.indexOf(payload.person)<0||typeof payload.token!=='string'||!/^[a-f0-9]{64}$/.test(payload.token))throw new Error('Netinkamas vardas arba raktas.');
     var expected=PropertiesService.getScriptProperties().getProperty('KEY_HASH_'+payload.person);
     if(!expected||!constantEqual_(hash_(payload.token),expected))throw new Error('Netinkamas vardas arba raktas.');
     if(!Array.isArray(payload.records)||payload.records.length>25)throw new Error('Vienu metu galima siųsti iki 25 įrašų.');
-    var validated=payload.records.map(function(record){return validate_(record,payload.person);});
+    var validated=payload.records.map(function(record){
+      var value=validate_(record,payload.person);
+      if(record.deleted===true) {
+        if(payload.version!==2)throw new Error('Šalinimui reikia antros protokolo versijos.');
+        value.deleted=true;
+      }
+      return value;
+    });
     var bases=payload.records.map(function(record){return record.baseRecord ? validate_(record.baseRecord,payload.person) : null;});
     var lock=LockService.getScriptLock();lock.waitLock(20000);
     try {
@@ -71,7 +78,7 @@ function doPost(e) {
       var records=rows.filter(function(row){return row[0]!=='';}).map(decode_);
       var byId={};records.forEach(function(record){if(byId[record.id])throw new Error('Lentelėje yra pasikartojančių ID.');byId[record.id]=record;});
       var additions=[],updates=[],acked=[],seen={};
-      var rowById={};rows.forEach(function(row,i){if(row[0])rowById[String(row[0])]=i+2;});
+      var rowById={};rows.forEach(function(row,i){if(row[0])rowById[String(row[0]).replace(/^deleted:/,'')]=i+2;});
       // Check ownership and the original version before writing any correction.
       validated.forEach(function(record,index){
         if(seen[record.id] && seen[record.id]!==fingerprint_(record))throw new Error('Pakete kartojasi skirtingos tos pačios išlaidos versijos.');
@@ -79,6 +86,8 @@ function doPost(e) {
         if(byId[record.id]) {
           var current=byId[record.id],base=bases[index];
           if(current.recordedBy!==payload.person)throw new Error('Taisyti galima tik savo įvestas išlaidas.');
+          // A stale phone cannot recreate a deleted expense, including a lost-reply retry.
+          if(current.deleted) {acked.push(record.id);return;}
           if(fingerprint_(current)!==fingerprint_(record)) {
             if(!base || base.id!==record.id || base.createdAt!==record.createdAt || fingerprint_(current)!==fingerprint_(base))throw new Error('Išlaida jau pakeista kitur arba neatitinka pradinės versijos. Pataisymas liko telefone.');
             updates.push(record);byId[record.id]=record;
@@ -96,7 +105,7 @@ function doPost(e) {
         records=records.map(function(record){return byId[record.id];}).concat(additions);
       }
       // Success is returned only after the Sheet write is flushed; a lost reply is safe to retry.
-      return json_({ok:true,version:1,person:payload.person,acked:acked,records:records});
+      return json_({ok:true,version:1,person:payload.person,acked:acked,records:records.map(function(record){return record.deleted ? {id:record.id,recordedBy:record.recordedBy,deleted:true,updatedAt:record.updatedAt} : record;})});
     } finally {lock.releaseLock();}
   } catch(error) {return json_({ok:false,error:String(error.message||'Sinchronizavimas nepavyko.').slice(0,220)});}
 }
@@ -115,10 +124,18 @@ function validate_(record,person) {
   return {id:record.id.toLowerCase(),createdAt:record.createdAt,payer:record.payer,description:record.description.trim(),amountMinor:record.amountMinor,currency:record.currency,rateMicros:record.rateMicros,eurCents:eurCents,participants:PEOPLE.filter(function(p){return record.participants.indexOf(p)>=0;}),recordedBy:person};
 }
 function safeText_(text){return /^[\s]*[=+\-@]/.test(text)?'\u200b'+text:text;}
-function encode_(r){return [r.id,r.createdAt,r.payer,safeText_(r.description),r.amountMinor/100,r.currency,r.currency==='MAD'?r.rateMicros/1000000:1,r.eurCents/100,r.participants.indexOf('Mikas')>=0,r.participants.indexOf('Alfonsas')>=0,r.participants.indexOf('Linas')>=0,r.recordedBy,r.updatedAt];}
+function encode_(r){
+  if(r.deleted)return ['deleted:'+r.id,'','','','','','','','','','',r.recordedBy,r.updatedAt];
+  return [r.id,r.createdAt,r.payer,safeText_(r.description),r.amountMinor/100,r.currency,r.currency==='MAD'?r.rateMicros/1000000:1,r.eurCents/100,r.participants.indexOf('Mikas')>=0,r.participants.indexOf('Alfonsas')>=0,r.participants.indexOf('Linas')>=0,r.recordedBy,r.updatedAt];
+}
 function decode_(row){
+  if(String(row[0]).indexOf('deleted:')===0) {
+    var id=String(row[0]).slice(8),person=String(row[11]);
+    if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id)||PEOPLE.indexOf(person)<0)throw new Error('Neteisinga pašalinimo žyma.');
+    return {id:id,recordedBy:person,deleted:true,updatedAt:String(row[12])};
+  }
   var record={id:String(row[0]),createdAt:row[1] instanceof Date?row[1].toISOString():String(row[1]),payer:String(row[2]),description:String(row[3]).replace(/^\u200b/,''),amountMinor:Math.round(Number(row[4])*100),currency:String(row[5]),rateMicros:Math.round(Number(row[6])*1000000),eurCents:Math.round(Number(row[7])*100),participants:PEOPLE.filter(function(p,i){return row[8+i]===true||String(row[8+i]).toUpperCase()==='TRUE';}),recordedBy:String(row[11]),updatedAt:row[12] instanceof Date?row[12].toISOString():String(row[12])};
   validate_(record,record.recordedBy);return record;
 }
-function fingerprint_(r){return JSON.stringify([r.id,r.createdAt,r.payer,r.description,r.amountMinor,r.currency,r.rateMicros,r.eurCents,r.participants,r.recordedBy]);}
+function fingerprint_(r){return JSON.stringify([r.id,r.createdAt,r.payer,r.description,r.amountMinor,r.currency,r.rateMicros,r.eurCents,r.participants,r.recordedBy,r.deleted===true]);}
 function json_(value){return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);}
