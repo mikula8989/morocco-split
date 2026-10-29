@@ -6,6 +6,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Morocco Split">
   <meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://open.er-api.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>Morocco Split</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="./icon-192.png"><link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./feedback.css">
   <script type="module" src="./app.js"></script>
 </head>
 <body>
@@ -16,6 +17,7 @@
     <main>
       <section class="card entry-card" aria-label="Išlaidos įvedimas">
         <form id="expense-form">
+          <div id="edit-note" class="notice" hidden>Taisai išlaidą <button type="button" id="edit-cancel" class="text-button">Atšaukti</button></div>
           <div class="amount-line"><label class="amount-label">Suma<input id="amount" name="amount" placeholder="0,00" inputmode="decimal" required autocomplete="off" aria-label="Suma"></label><label class="currency-label">Valiuta<select name="currency" id="currency"><option>EUR</option><option>MAD</option></select></label></div>
           <p id="rate-info" class="small" role="status" hidden></p>
           <label>Už ką mokėta?<input name="description" id="description" maxlength="160" placeholder="Vakarienė, taksi, riadas…" required></label>

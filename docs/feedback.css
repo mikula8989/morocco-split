@@ -1,0 +1,14 @@
+.primary { transition: background-color .2s, transform .2s; }
+.primary.saved { background: var(--green); opacity: 1; cursor: default; animation: saved-pop .4s ease-out; }
+.primary.saved span { animation: saved-check .4s ease-out; }
+.expense-saved { animation: saved-row 1.5s ease-out; }
+.edit-expense { min-height: 44px; padding: 10px 0 0 16px; }
+#edit-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#form-message { min-height: 2.5em; }
+@keyframes saved-pop { 50% { transform: scale(.97); } }
+@keyframes saved-check { from { transform: scale(.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes saved-row { from { background-color: #dceee2; } to { background-color: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .primary { transition: none; }
+  .primary.saved, .primary.saved span, .expense-saved { animation: none; }
+}

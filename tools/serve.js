@@ -5,7 +5,7 @@ const root=path.resolve('docs');
 const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json'};
 http.createServer((req,res)=>{
   const url=new URL(req.url,'http://localhost');
-  if(['/tests/db-browser.html','/tests/mobile.html'].includes(url.pathname)){
+  if(['/tests/db-browser.html','/tests/mobile.html','/tests/ui-browser.html'].includes(url.pathname)){
     res.writeHead(200,{'Content-Type':'text/html','Cache-Control':'no-store'}).end(fs.readFileSync(path.resolve('.'+url.pathname)));return;
   }
   const relative=decodeURIComponent(url.pathname).replace(/^\/morocco-split\/?/,'/');

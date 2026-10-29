@@ -7,7 +7,7 @@ import {normalizeExpense,PEOPLE} from '../docs/core.js';
 const source=fs.readFileSync(new URL('../apps-script/Code.gs',import.meta.url),'utf8');
 function harness(){
   const rows=[],props={},key='a'.repeat(64);let locked=false;
-  const sheet={getLastRow:()=>rows.length+1,getRange:(r,c,h,w)=>({getValues:()=>r===1?[['ID','Sukurta','Mokėtojas','Aprašymas','Suma','Valiuta','Kursas MAD/EUR','Suma EUR','Mikas dalinasi','Alfonsas dalinasi','Linas dalinasi','Įrašė','Atnaujinta']]:rows.slice(r-2,r-2+h),setValues:values=>{assert.ok(locked);rows.push(...values);}})};
+  const sheet={getLastRow:()=>rows.length+1,getRange:(r,c,h,w)=>({getValues:()=>r===1?[['ID','Sukurta','Mokėtojas','Aprašymas','Suma','Valiuta','Kursas MAD/EUR','Suma EUR','Mikas dalinasi','Alfonsas dalinasi','Linas dalinasi','Įrašė','Atnaujinta']]:rows.slice(r-2,r-2+h),setValues:values=>{assert.ok(locked);values.forEach((value,i)=>rows[r-2+i]=value);}})};
   const context=vm.createContext({console,SpreadsheetApp:{openById:()=>({getSheetByName:()=>sheet}),flush:()=>{}},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k],setProperty:(k,v)=>props[k]=v})},Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>[...crypto.createHash('sha256').update(text).digest()]},LockService:{getScriptLock:()=>({waitLock:()=>locked=true,releaseLock:()=>locked=false})},ContentService:{MimeType:{JSON:'json'},createTextOutput:text=>({setMimeType:()=>text})}});
   vm.runInContext(source,context);props.KEY_HASH_Mikas=crypto.createHash('sha256').update(key).digest('hex');
   const post=(records,changes={})=>JSON.parse(context.doPost({postData:{contents:JSON.stringify({version:1,person:'Mikas',token:key,records,...changes})}}));
@@ -34,4 +34,24 @@ test('batch validates before writing and duplicate IDs within a batch write once
 });
 test('empty authenticated sync reads other participants entries; unauthenticated GET exposes no records',()=>{
   const h=harness(),entry=make();h.post([entry]);assert.equal(h.post([]).records.length,1);assert.equal(JSON.parse(h.context.doGet()).records,undefined);
+});
+test('correction updates the same row, preserves rate and retries after a lost response',()=>{
+  const h=harness(),entry=make();h.post([entry]);
+  const changed={...entry,amountMinor:20000,eurCents:Math.round(20000*1000000/entry.rateMicros),description:'Pataisyta',baseRecord:entry};
+  const response=h.post([changed]);assert.equal(response.ok,true);assert.equal(h.rows.length,1);
+  assert.equal(response.records[0].description,'Pataisyta');assert.equal(response.records[0].rateMicros,entry.rateMicros);
+  assert.equal(h.post([changed]).ok,true);assert.equal(h.rows.length,1);
+});
+test('stale correction and forged ownership cannot overwrite a row or partially add a batch',()=>{
+  const h=harness(),entry=make();h.post([entry]);
+  const changed={...entry,description:'First edit',baseRecord:entry};assert.equal(h.post([changed]).ok,true);
+  assert.equal(h.post([make(),{...entry,description:'Stale edit',baseRecord:entry}]).ok,false);
+  assert.equal(h.rows.length,1);assert.equal(h.post([]).records[0].description,'First edit');
+  h.rows[0][11]='Linas';
+  assert.equal(h.post([{...entry,description:'Stolen',baseRecord:entry}]).ok,false);
+  assert.equal(h.rows[0][3],'First edit');
+});
+test('offline correction before first sync creates only the corrected expense',()=>{
+  const h=harness(),entry=make();const response=h.post([{...entry,description:'Corrected offline',baseRecord:entry}]);
+  assert.equal(response.ok,true);assert.equal(h.rows.length,1);assert.equal(response.records[0].description,'Corrected offline');
 });

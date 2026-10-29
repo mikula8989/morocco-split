@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Running · expense UI</title>
+<h1>Expense editing and save feedback</h1><pre id="results">Running…</pre>
+<p>Run only in a disposable browser context: this fixture sets a test profile and creates test expenses.</p>
+<iframe id="app" width="390" height="844" title="Test app"></iframe>
+<script type="module">
+import {all,saveSettings,saveFxRate,transact} from '/morocco-split/db.js';
+const results=[],frame=document.querySelector('#app');
+const report=(name,pass)=>{results.push((pass?'PASS ':'FAIL ')+name);if(!pass)throw Error(name);};
+const wait=async check=>{for(let i=0;i<150;i++){if(check())return;await new Promise(r=>setTimeout(r,30));}throw Error('Timed out');};
+const original={id:crypto.randomUUID(),createdAt:new Date().toISOString(),description:'UI TEST',payer:'Mikas',participants:['Mikas','Linas'],amountMinor:10000,eurCents:1000,currency:'MAD',rateMicros:10000000,recordedBy:'Mikas'};
+try {
+ await saveSettings({person:'Mikas'});
+ await saveFxRate({rateMicros:11000000,updatedAt:Date.now()-1000,nextUpdateAt:Date.now()+86400000,fetchedAt:Date.now()});
+ await transact(['expenses'],'readwrite',tx=>tx.objectStore('expenses').add(original));
+ frame.src='/morocco-split/';
+ await new Promise(resolve=>frame.onload=resolve);
+ const doc=frame.contentDocument,$=selector=>doc.querySelector(selector);
+ await wait(()=>$('.edit-expense'));
+ $('.edit-expense').click();
+ report('edit opens original amount and currency',$('#amount').value==='100.00'&&$('#currency').value==='MAD'&&!$('#edit-note').hidden);
+ $('#amount').value='200';$('#description').value='CORRECTED UI';
+ $('#expense-form').requestSubmit();await wait(()=>$('#save').classList.contains('saved'));
+ report('save shows green confirmation and blocks duplicate taps',$('#save').textContent.includes('Išsaugota')&&$('#save').disabled);
+ const updated=(await all('expenses')).find(e=>e.id===original.id);
+ report('correction keeps ID and original MAD rate',updated.amountMinor===20000&&updated.eurCents===2000&&updated.rateMicros===original.rateMicros&&updated.baseRecord.id===original.id);
+ report('corrected entry highlighted in history',Boolean($('.expense-saved')));
+ await wait(()=>!$('#save').disabled);
+ $('.edit-expense').click();$('#amount').value='999';$('#edit-cancel').click();
+ report('cancel preserves saved expense',(await all('expenses')).find(e=>e.id===original.id).amountMinor===20000&&$('#edit-note').hidden);
+ $('#currency').value='EUR';$('#amount').value='12.34';$('#description').value='NEW UI';
+ $('#expense-form').requestSubmit();$('#expense-form').dispatchEvent(new Event('submit',{cancelable:true}));
+ await wait(()=>$('#save').classList.contains('saved'));
+ const entries=await all('expenses');
+ report('rapid duplicate submission creates one expense',entries.length===2&&entries.find(e=>e.description==='NEW UI').eurCents===1234);
+ report('form resets only after persistence',$('#amount').value===''&&$('#description').value===''&&$('#form-message').textContent.includes('Išsaugota telefone'));
+} catch(error){results.push('ERROR '+error.message);}
+document.querySelector('#results').textContent=results.join('\n');
+document.title=results.some(r=>r.startsWith('FAIL')||r.startsWith('ERROR'))?'FAIL · expense UI':'PASS · expense UI';
+</script></html>

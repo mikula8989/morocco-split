@@ -52,7 +52,7 @@ function showKeys_(keys) {
   html+='<p>Apps Script nustatymuose saugomos tik SHA-256 raktų maišos.</p></div>';
   SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(html).setWidth(560).setHeight(590),'Morocco Split · raktai');
 }
-function doGet() {return json_({ok:true,service:'Morocco Split',version:1,message:'Sinchronizavimui naudojamas tik autentifikuotas POST.'});}
+function doGet() {return json_({ok:true,service:'Morocco Split',version:1,editing:true,message:'Sinchronizavimui naudojamas tik autentifikuotas POST.'});}
 function doPost(e) {
   try {
     if(!e||!e.postData||e.postData.contents.length>60000)throw new Error('Neteisinga užklausa.');
@@ -62,6 +62,7 @@ function doPost(e) {
     if(!expected||!constantEqual_(hash_(payload.token),expected))throw new Error('Netinkamas vardas arba raktas.');
     if(!Array.isArray(payload.records)||payload.records.length>25)throw new Error('Vienu metu galima siųsti iki 25 įrašų.');
     var validated=payload.records.map(function(record){return validate_(record,payload.person);});
+    var bases=payload.records.map(function(record){return record.baseRecord ? validate_(record.baseRecord,payload.person) : null;});
     var lock=LockService.getScriptLock();lock.waitLock(20000);
     try {
       var sheet=sheet_(),lastRow=sheet.getLastRow();
@@ -69,21 +70,30 @@ function doPost(e) {
       var rows=lastRow>1?sheet.getRange(2,1,lastRow-1,13).getValues():[];
       var records=rows.filter(function(row){return row[0]!=='';}).map(decode_);
       var byId={};records.forEach(function(record){if(byId[record.id])throw new Error('Lentelėje yra pasikartojančių ID.');byId[record.id]=record;});
-      var additions=[],acked=[];
-      // Validate the entire batch before writing anything. Same ID + changed payload is a conflict.
-      validated.forEach(function(record){
+      var additions=[],updates=[],acked=[],seen={};
+      var rowById={};rows.forEach(function(row,i){if(row[0])rowById[String(row[0])]=i+2;});
+      // Check ownership and the original version before writing any correction.
+      validated.forEach(function(record,index){
+        if(seen[record.id] && seen[record.id]!==fingerprint_(record))throw new Error('Pakete kartojasi skirtingos tos pačios išlaidos versijos.');
+        seen[record.id]=fingerprint_(record);
         if(byId[record.id]) {
-          if(fingerprint_(byId[record.id])!==fingerprint_(record))throw new Error('ID konfliktas: '+record.id+'. Įrašas liko telefone.');
+          var current=byId[record.id],base=bases[index];
+          if(current.recordedBy!==payload.person)throw new Error('Taisyti galima tik savo įvestas išlaidas.');
+          if(fingerprint_(current)!==fingerprint_(record)) {
+            if(!base || base.id!==record.id || base.createdAt!==record.createdAt || fingerprint_(current)!==fingerprint_(base))throw new Error('Išlaida jau pakeista kitur arba neatitinka pradinės versijos. Pataisymas liko telefone.');
+            updates.push(record);byId[record.id]=record;
+          }
         } else {byId[record.id]=record;additions.push(record);}
         acked.push(record.id);
       });
       if(records.length+additions.length>9999)throw new Error('Pasiektas kelionės įrašų limitas.');
-      if(additions.length) {
+      if(additions.length || updates.length) {
         var now=new Date().toISOString();
         additions.forEach(function(record){record.updatedAt=now;});
-        sheet.getRange(lastRow+1,1,additions.length,13).setValues(additions.map(encode_));
+        updates.forEach(function(record){record.updatedAt=now;sheet.getRange(rowById[record.id],1,1,13).setValues([encode_(record)]);});
+        if(additions.length)sheet.getRange(lastRow+1,1,additions.length,13).setValues(additions.map(encode_));
         SpreadsheetApp.flush();
-        records=records.concat(additions);
+        records=records.map(function(record){return byId[record.id];}).concat(additions);
       }
       // Success is returned only after the Sheet write is flushed; a lost reply is safe to retry.
       return json_({ok:true,version:1,person:payload.person,acked:acked,records:records});

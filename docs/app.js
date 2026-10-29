@@ -5,15 +5,36 @@ import {latestRate, validRate} from './fx.js';
 const $ = selector => document.querySelector(selector);
 let settings = {}, syncing = false, failureCount = 0, retryTimer, installPrompt, readyOffline = false;
 let entries = [], pending = [];
+let editing = null, saving = false, savedTimer, highlightedId;
 let fxRate = null, fxPromise, fxError = '', fxRefreshFailed = false, nextFxAttempt = 0;
 function node(tag, text, className) { const element=document.createElement(tag); if(text!==undefined) element.textContent=text; if(className) element.className=className; return element; }
 function message(selector, text, error=false) { $(selector).textContent=text; $(selector).classList.toggle('error', error); }
 const configured = () => Boolean(settings.endpoint && settings.token && settings.person);
 function showSettings() {
+  if(editing) {message('#form-message','Pirmiausia išsaugok arba atšauk taisymą.',true);return;}
   $('#identity').value=settings.person || 'Mikas'; $('#endpoint').value=settings.endpoint || DEFAULT_ENDPOINT;
   $('#token').value=settings.token || ''; $('#settings-dialog').showModal();
 }
-function formData() { return {amount:$('#amount').value,description:$('#description').value,currency:$('#currency').value,rate:fxRate ? (fxRate.rateMicros/1000000).toFixed(6) : '',payer:$('#payer').value,participants:[...document.querySelectorAll('[name=participant]:checked')].map(n=>n.value)}; }
+function formData() {
+  const rate=editing?.currency==='MAD' ? editing.rateMicros : fxRate?.rateMicros;
+  return {amount:$('#amount').value,description:$('#description').value,currency:$('#currency').value,rate:rate ? (rate/1000000).toFixed(6) : '',payer:$('#payer').value,participants:[...document.querySelectorAll('[name=participant]:checked')].map(n=>n.value)};
+}
+function saveLabel(text, icon) { $('#save').replaceChildren(document.createTextNode(text+' '),node('span',icon)); }
+function finishEditing() {
+  editing=null;$('#edit-note').hidden=true;$('#amount').value='';$('#description').value='';
+  saveLabel('Išsaugoti išlaidą','＋');preview();
+}
+function startEditing(expense) {
+  if(syncing || saving) {message('#form-message','Palauk, kol baigsis išsaugojimas ir sinchronizavimas.',true);return;}
+  clearTimeout(savedTimer);$('#save').classList.remove('saved');
+  editing=expense;$('#edit-note').hidden=false;
+  $('#amount').value=(expense.amountMinor/100).toFixed(2);$('#description').value=expense.description;
+  $('#currency').value=expense.currency;$('#payer').value=expense.payer;
+  document.querySelectorAll('[name=participant]').forEach(n=>n.checked=expense.participants.includes(n.value));
+  saveLabel('Išsaugoti pataisymą','✓');message('#form-message','');preview();
+  $('.entry-card').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
+  $('#amount').focus({preventScroll:true});
+}
 async function refreshRate() {
   if(fxPromise) return fxPromise;
   if(Date.now() < nextFxAttempt) return fxRate;
@@ -31,7 +52,9 @@ async function refreshRate() {
 }
 function preview() {
   $('#rate-info').hidden=$('#currency').value!=='MAD';
-  if(fxRate) {
+  if(editing?.currency==='MAD') {
+    $('#rate-info').textContent=`Išlaidos kursas: 1 EUR = ${editing.rateMicros/1000000} MAD · taisant išlaikomas pradinis kursas`;
+  } else if(fxRate) {
     const date=new Date(fxRate.updatedAt).toLocaleDateString('lt-LT');
     const cached=!navigator.onLine || fxRefreshFailed || Date.now()>=fxRate.nextUpdateAt;
     $('#rate-info').textContent=`${cached?'Paskutinis gautas kursas':'Automatinis kursas'}: 1 EUR = ${new Intl.NumberFormat('lt-LT',{maximumFractionDigits:6}).format(fxRate.rateMicros/1000000)} MAD · ${date}${!navigator.onLine?' · be ryšio':''}`;
@@ -61,10 +84,17 @@ async function render() {
   $('#history-empty').hidden=entries.length>0; $('#history').replaceChildren();
   for (const expense of entries) {
     const row=node('article',undefined,'expense'), left=node('div'), right=node('div',undefined,'expense-amount');
+    if(expense.id===highlightedId) row.classList.add('expense-saved');
     left.append(node('h3',expense.description),node('small',`${expense.payer} sumokėjo · ${expense.participants.join(', ')}`),node('small',new Date(expense.createdAt).toLocaleString('lt-LT',{dateStyle:'short',timeStyle:'short'})));
     right.append(node('b',new Intl.NumberFormat('lt-LT',{style:'currency',currency:expense.currency}).format(expense.amountMinor/100)));
     if(expense.currency==='MAD') right.append(node('small',`${money(expense.eurCents)} · 1 € = ${expense.rateMicros/1000000} MAD`));
-    right.append(node('small',queued.has(expense.id)?'Laukia siuntimo':'Sinchronizuota',queued.has(expense.id)?'pending':'')); row.append(left,right); $('#history').append(row);
+    right.append(node('small',queued.has(expense.id)?'Laukia siuntimo':'Sinchronizuota',queued.has(expense.id)?'pending':''));
+    if(expense.recordedBy===settings.person) {
+      const edit=node('button','Taisyti','text-button edit-expense');edit.type='button';
+      edit.setAttribute('aria-label',`Taisyti išlaidą: ${expense.description}`);
+      edit.addEventListener('click',()=>startEditing(expense));right.append(edit);
+    }
+    row.append(left,right); $('#history').append(row);
   }
 }
 function scheduleRetry() {
@@ -72,7 +102,7 @@ function scheduleRetry() {
   if(configured() && navigator.onLine) retryTimer=setTimeout(()=>sync(),Math.min(300000,15000*2**Math.min(failureCount,5)));
 }
 async function sync() {
-  if(syncing || !navigator.onLine || !configured()) return;
+  if(syncing || editing || saving || !navigator.onLine || !configured()) return;
   syncing=true; $('#sync').disabled=true; clearTimeout(retryTimer);
   try {
     do {
@@ -87,7 +117,10 @@ async function sync() {
         if(!result.ok) throw new Error('Serveris nepasiekiamas.');
         response=await result.json();
       } finally {clearTimeout(timeout);}
-      if(response?.ok!==true) throw new Error(response?.error||'Sinchronizavimas nepatvirtintas.');
+      if(response?.ok!==true) {
+        if(sent.some(e=>e.baseRecord) && response?.error?.startsWith('ID konfliktas:')) throw new Error('Pataisymas liko telefone. Reikia atnaujinti Google sinchronizavimo paslaugą.');
+        throw new Error(response?.error||'Sinchronizavimas nepatvirtintas.');
+      }
       if(response.person!==credentials.person) throw new Error('Raktas neatitinka pasirinkto vardo.');
       await applySync(response,sent);
       if(sent.some(e=>!response.acked.includes(e.id))) throw new Error('Dalis įrašų liko eilėje. Bandysime vėl.');
@@ -103,20 +136,29 @@ async function sync() {
   } finally {syncing=false; $('#sync').disabled=false;}
 }
 $('#expense-form').addEventListener('submit',async event=>{
-  event.preventDefault(); $('#save').disabled=true;
+  event.preventDefault();if(saving)return;saving=true;clearTimeout(savedTimer);
+  $('#save').disabled=true;$('#save').classList.remove('saved');$('#save').setAttribute('aria-busy','true');saveLabel('Saugoma…','…');
+  let success=false;
   try {
     if(!settings.person){showSettings();message('#settings-message','Pirmiausia pasirink, kas tu esi. Ryšio nuorodą ir raktą gali pridėti vėliau.');return;}
-    if($('#currency').value==='MAD') {
+    if($('#currency').value==='MAD' && editing?.currency!=='MAD') {
       await refreshRate();
       if(!fxRate) throw new Error(fxError||'MAD kursas dar negautas. Pabandyk su internetu dar kartą.');
     }
-    const expense={...normalizeExpense(formData()),id:crypto.randomUUID(),createdAt:new Date().toISOString(),recordedBy:settings.person};
-    await enqueue(expense);
-    $('#amount').value='';$('#description').value='';preview();await render();
-    message('#form-message','Išsaugota telefone. '+(navigator.onLine&&configured()?'Siunčiame į bendrą lentelę.':'Išsiųsime, kai bus ryšys ir prijungtas tavo raktas.')); void sync();
+    const expense={...normalizeExpense(formData()),id:editing?.id||crypto.randomUUID(),createdAt:editing?.createdAt||new Date().toISOString(),recordedBy:settings.person};
+    if(editing) expense.baseRecord=editing.baseRecord||editing;
+    await enqueue(expense,editing);
+    highlightedId=expense.id;finishEditing();await render();success=true;
+    saveLabel('Išsaugota','✓');$('#save').classList.add('saved');
+    message('#form-message','Išsaugota telefone ✓ '+(navigator.onLine&&configured()?'Siunčiame į bendrą lentelę.':'Išsiųsime, kai bus ryšys ir prijungtas tavo raktas.'));
   } catch(error) {message('#form-message',error.message,true);}
-  finally {$('#save').disabled=false;}
+  finally {
+    $('#save').removeAttribute('aria-busy');
+    if(success) savedTimer=setTimeout(()=>{saving=false;highlightedId=null;$('#save').disabled=false;$('#save').classList.remove('saved');saveLabel('Išsaugoti išlaidą','＋');void sync();},1400);
+    else {saving=false;$('#save').disabled=false;saveLabel(editing?'Išsaugoti pataisymą':'Išsaugoti išlaidą',editing?'✓':'＋');}
+  }
 });
+$('#edit-cancel').addEventListener('click',()=>{if(saving)return;finishEditing();message('#form-message','Taisymas atšauktas.');void sync();});
 $('#expense-form').addEventListener('input',preview);
 $('#currency').addEventListener('change',()=>{preview();if($('#currency').value==='MAD')void refreshRate();});
 $('#settings-open').addEventListener('click',showSettings);$('#connect-open').addEventListener('click',showSettings);

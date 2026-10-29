@@ -17,6 +17,14 @@ try {
  await applySync({ok:true,acked:[],records:[{...third,description:'stale server value'}]},[]);
  report('server snapshot never overwrites pending version',(await all('expenses')).find(e=>e.id===third.id).description==='TEST ONLY');
  let malformedRejected=false;try{await applySync({ok:true,acked:[third.id],records:[]},[third]);}catch{malformedRejected=true;}report('missing canonical record retains pending entry',malformedRejected&&(await all('outbox')).some(e=>e.id===third.id));
+ const corrected={...third,description:'CORRECTED',baseRecord:third};await enqueue(corrected,third);
+ await applySync({ok:true,acked:[third.id],records:[third]},[third]);
+ report('old acknowledgement preserves a newer correction',(await all('outbox')).find(e=>e.id===third.id).description==='CORRECTED'&&(await all('expenses')).find(e=>e.id===third.id).description==='CORRECTED');
+ const canonical={...corrected,updatedAt:new Date().toISOString()};delete canonical.baseRecord;
+ await applySync({ok:true,acked:[third.id],records:[canonical]},[corrected]);
+ report('confirmed correction clears queue and stores canonical version',!(await all('outbox')).some(e=>e.id===third.id)&&!(await all('expenses')).find(e=>e.id===third.id).baseRecord);
+ let staleRejected=false;try{await enqueue({...third,description:'STALE'},third);}catch{staleRejected=true;}
+ report('stale local editor cannot overwrite newer data',staleRejected&&(await all('expenses')).find(e=>e.id===third.id).description==='CORRECTED');
 }catch(error){results.push('ERROR '+error.message);}
 finally{
  await transact(['expenses','outbox'],'readwrite',tx=>{for(const id of created){tx.objectStore('expenses').delete(id);tx.objectStore('outbox').delete(id);}});

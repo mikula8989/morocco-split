@@ -27,10 +27,18 @@ export const getSettings = () => transact(['settings'], 'readonly', tx => tx.obj
 export const saveSettings = value => transact(['settings'], 'readwrite', tx => tx.objectStore('settings').put(value, 'profile'));
 export const getFxRate = () => transact(['settings'], 'readonly', tx => tx.objectStore('settings').get('eur-mad-rate'));
 export const saveFxRate = value => transact(['settings'], 'readwrite', tx => tx.objectStore('settings').put(value, 'eur-mad-rate'));
-export async function enqueue(expense) {
+export async function enqueue(expense, previous = null) {
   await transact(['expenses','outbox'], 'readwrite', tx => {
-    tx.objectStore('expenses').add(expense);
-    tx.objectStore('outbox').add(expense);
+    if(previous) {
+      const request=tx.objectStore('expenses').get(expense.id);
+      request.onsuccess=()=>{
+        if(JSON.stringify(request.result)!==JSON.stringify(previous)) {tx.abort();return;}
+        tx.objectStore('expenses').put(expense);tx.objectStore('outbox').put(expense);
+      };
+    } else {
+      tx.objectStore('expenses').add(expense);
+      tx.objectStore('outbox').add(expense);
+    }
   });
 }
 export async function applySync(response, sent) {
@@ -44,11 +52,14 @@ export async function applySync(response, sent) {
   if (response.acked.some(id=>!ids.has(id))) throw new Error('Trūksta patvirtinto įrašo.');
   await transact(['expenses','outbox'], 'readwrite', tx => {
     const outbox = tx.objectStore('outbox');
-    response.acked.forEach(id => outbox.delete(id));
     // A new entry may be added while the request is in flight. Never overwrite its pending version.
     for (const record of response.records) {
       const request = outbox.get(record.id);
-      request.onsuccess = () => { if (!request.result) tx.objectStore('expenses').put(record); };
+      request.onsuccess = () => {
+        const confirmed=response.acked.includes(record.id) && JSON.stringify(request.result)===JSON.stringify(sent.find(e=>e.id===record.id));
+        if(confirmed) outbox.delete(record.id);
+        if (!request.result || confirmed) tx.objectStore('expenses').put(record);
+      };
     }
   });
 }
