@@ -25,6 +25,8 @@ export async function transact(stores, mode, operation) {
 export const all = store => transact([store], 'readonly', tx => tx.objectStore(store).getAll());
 export const getSettings = () => transact(['settings'], 'readonly', tx => tx.objectStore('settings').get('profile'));
 export const saveSettings = value => transact(['settings'], 'readwrite', tx => tx.objectStore('settings').put(value, 'profile'));
+export const getFxRate = () => transact(['settings'], 'readonly', tx => tx.objectStore('settings').get('eur-mad-rate'));
+export const saveFxRate = value => transact(['settings'], 'readwrite', tx => tx.objectStore('settings').put(value, 'eur-mad-rate'));
 export async function enqueue(expense) {
   await transact(['expenses','outbox'], 'readwrite', tx => {
     tx.objectStore('expenses').add(expense);

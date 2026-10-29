@@ -1,9 +1,11 @@
 import {PEOPLE, normalizeExpense, balances, settlements, money} from './core.js';
-import {all, getSettings, saveSettings, enqueue, applySync} from './db.js';
+import {all, getSettings, saveSettings, enqueue, applySync, getFxRate, saveFxRate} from './db.js';
 import {DEFAULT_ENDPOINT} from './config.js';
+import {latestRate, validRate} from './fx.js';
 const $ = selector => document.querySelector(selector);
 let settings = {}, syncing = false, failureCount = 0, retryTimer, installPrompt, readyOffline = false;
 let entries = [], pending = [];
+let fxRate = null, fxPromise, fxError = '', fxRefreshFailed = false, nextFxAttempt = 0;
 function node(tag, text, className) { const element=document.createElement(tag); if(text!==undefined) element.textContent=text; if(className) element.className=className; return element; }
 function message(selector, text, error=false) { $(selector).textContent=text; $(selector).classList.toggle('error', error); }
 const configured = () => Boolean(settings.endpoint && settings.token && settings.person);
@@ -11,10 +13,29 @@ function showSettings() {
   $('#identity').value=settings.person || 'Mikas'; $('#endpoint').value=settings.endpoint || DEFAULT_ENDPOINT;
   $('#token').value=settings.token || ''; $('#settings-dialog').showModal();
 }
-function formData() { return {amount:$('#amount').value,description:$('#description').value,currency:$('#currency').value,rate:$('#rate').value,payer:$('#payer').value,participants:[...document.querySelectorAll('[name=participant]:checked')].map(n=>n.value)}; }
+function formData() { return {amount:$('#amount').value,description:$('#description').value,currency:$('#currency').value,rate:fxRate ? (fxRate.rateMicros/1000000).toFixed(6) : '',payer:$('#payer').value,participants:[...document.querySelectorAll('[name=participant]:checked')].map(n=>n.value)}; }
+async function refreshRate() {
+  if(fxPromise) return fxPromise;
+  if(Date.now() < nextFxAttempt) return fxRate;
+  fxPromise=(async()=>{
+    try {
+      const result=await latestRate(fxRate,{online:navigator.onLine});
+      fxRate=result.rate;fxRefreshFailed=result.refreshFailed;fxError='';
+      if(result.refreshed) await saveFxRate(fxRate);
+      nextFxAttempt=Date.now()+(result.refreshFailed ? 60000 : 0);
+    } catch(error) {fxError=error.message;fxRefreshFailed=true;nextFxAttempt=Date.now()+60000;}
+    return fxRate;
+  })();
+  preview();
+  try {return await fxPromise;} finally {fxPromise=undefined;preview();}
+}
 function preview() {
-  $('#rate-wrap').hidden = $('#currency').value !== 'MAD';
-  $('#rate').required = $('#currency').value === 'MAD';
+  $('#rate-info').hidden=$('#currency').value!=='MAD';
+  if(fxRate) {
+    const date=new Date(fxRate.updatedAt).toLocaleDateString('lt-LT');
+    const cached=!navigator.onLine || fxRefreshFailed || Date.now()>=fxRate.nextUpdateAt;
+    $('#rate-info').textContent=`${cached?'Paskutinis gautas kursas':'Automatinis kursas'}: 1 EUR = ${new Intl.NumberFormat('lt-LT',{maximumFractionDigits:6}).format(fxRate.rateMicros/1000000)} MAD · ${date}${!navigator.onLine?' · be ryšio':''}`;
+  } else {$('#rate-info').textContent=fxPromise?'Gaunamas MAD kursas…':fxError||'Gaunamas MAD kursas…';}
   try { const data = normalizeExpense({...formData(),description:'preview'}); $('#split-preview').textContent=`Iš viso ${money(data.eurCents)} · ${data.participants.length} dalyviams. Centų likutis paskirstomas vardų eilės tvarka.`; }
   catch { $('#split-preview').textContent='Dalinama lygiomis dalimis. Pažymėk, kam tenka ši išlaida.'; }
 }
@@ -85,8 +106,11 @@ $('#expense-form').addEventListener('submit',async event=>{
   event.preventDefault(); $('#save').disabled=true;
   try {
     if(!settings.person){showSettings();message('#settings-message','Pirmiausia pasirink, kas tu esi. Ryšio nuorodą ir raktą gali pridėti vėliau.');return;}
+    if($('#currency').value==='MAD') {
+      await refreshRate();
+      if(!fxRate) throw new Error(fxError||'MAD kursas dar negautas. Pabandyk su internetu dar kartą.');
+    }
     const expense={...normalizeExpense(formData()),id:crypto.randomUUID(),createdAt:new Date().toISOString(),recordedBy:settings.person};
-    if($('#rate').value) {settings.rate=$('#rate').value;await saveSettings(settings);}
     await enqueue(expense);
     $('#amount').value='';$('#description').value='';preview();await render();
     message('#form-message','Išsaugota telefone. '+(navigator.onLine&&configured()?'Siunčiame į bendrą lentelę.':'Išsiųsime, kai bus ryšys ir prijungtas tavo raktas.')); void sync();
@@ -94,6 +118,7 @@ $('#expense-form').addEventListener('submit',async event=>{
   finally {$('#save').disabled=false;}
 });
 $('#expense-form').addEventListener('input',preview);
+$('#currency').addEventListener('change',()=>{preview();if($('#currency').value==='MAD')void refreshRate();});
 $('#settings-open').addEventListener('click',showSettings);$('#connect-open').addEventListener('click',showSettings);
 $('#settings-close').addEventListener('click',()=>$('#settings-dialog').close());
 $('#settings-form').addEventListener('submit',async event=>{
@@ -107,7 +132,7 @@ $('#settings-form').addEventListener('submit',async event=>{
     $('#settings-dialog').close();await render();void sync();
   } catch(error) {message('#settings-message',error.message,true);}
 });
-$('#sync').addEventListener('click',()=>configured()?sync():showSettings());
+$('#sync').addEventListener('click',()=>{nextFxAttempt=0;void refreshRate();return configured()?sync():showSettings();});
 $('#export').addEventListener('click',()=>{
   const blob=new Blob([JSON.stringify({version:1,exportedAt:new Date().toISOString(),expenses:entries,pendingIds:pending.map(e=>e.id)},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob),link=node('a');link.href=url;link.download=`morocco-split-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
@@ -118,14 +143,16 @@ $('#install').addEventListener('click',async()=>{
   else {$('#offline-ready').textContent=readyOffline?'Programėlės failai jau paruošti darbui be ryšio.':'Palaikyk programėlę atidarytą su internetu, kol failai bus paruošti.';$('#install-dialog').showModal();}
 });
 $('#install-close').addEventListener('click',()=>$('#install-dialog').close());
-window.addEventListener('online',()=>sync());window.addEventListener('offline',()=>render());
-window.addEventListener('focus',()=>sync());document.addEventListener('visibilitychange',()=>{if(!document.hidden)void sync();});
-setInterval(()=>{if(!document.hidden)void sync();},60000);
+window.addEventListener('online',()=>{nextFxAttempt=0;void refreshRate();void sync();});window.addEventListener('offline',()=>{preview();void render();});
+window.addEventListener('focus',()=>{void refreshRate();void sync();});document.addEventListener('visibilitychange',()=>{if(!document.hidden){void refreshRate();void sync();}});
+setInterval(()=>{if(!document.hidden){void refreshRate();void sync();}},60000);
 async function boot(){
   try {
     settings=await getSettings()||{}; if(!settings.endpoint&&DEFAULT_ENDPOINT)settings.endpoint=DEFAULT_ENDPOINT;
-    if(settings.person)$('#payer').value=settings.person;$('#rate').value=settings.rate||'';
+    if(settings.person)$('#payer').value=settings.person;
+    const cachedRate=await getFxRate();fxRate=validRate(cachedRate)?cachedRate:null;
     await render();preview();void sync();
+    void refreshRate();
     if(navigator.storage?.persist) void navigator.storage.persist();
     if('serviceWorker' in navigator){
       await navigator.serviceWorker.register('./sw.js');await navigator.serviceWorker.ready;readyOffline=true;
